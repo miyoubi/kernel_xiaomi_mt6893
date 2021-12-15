@@ -119,6 +119,9 @@ unsigned int mt_cpufreq_find_Vboot_idx(unsigned int cluster_id)
 	if (p == NULL)
 		return 0;
 
+	if (p == NULL)
+		return 0;
+
 	idx = _search_available_freq_idx_under_v(p, VBOOT_VOLT);
 
 	if (idx > p->nr_opp_tbl)
