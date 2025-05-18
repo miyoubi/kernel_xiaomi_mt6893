@@ -18,37 +18,38 @@
 #include "goodix_cfg_bin.h"
 #include "goodix_default_fw.h"
 /* COMMON PART - START */
+#define TS_DEFAULT_FIRMWARE			"goodix_gt9896_fw_k16.bin"
 
 #define FW_HEADER_SIZE				256
 #define FW_SUBSYS_INFO_SIZE			8
-#define FW_SUBSYS_INFO_OFFSET			32
+#define FW_SUBSYS_INFO_OFFSET		32
 #define FW_SUBSYS_MAX_NUM			28
 
 #define ISP_MAX_BUFFERSIZE			(1024 * 4)
 
 #define HW_REG_CPU_CTRL				0x2180
-#define HW_REG_DSP_MCU_POWER			0x2010
+#define HW_REG_DSP_MCU_POWER		0x2010
 #define HW_REG_RESET				0x2184
 #define HW_REG_SCRAMBLE				0x2218
 #define HW_REG_BANK_SELECT			0x2048
-#define HW_REG_ACCESS_PATCH0			0x204D
+#define HW_REG_ACCESS_PATCH0		0x204D
 #define HW_REG_EC_SRM_START			0x204F
 #define HW_REG_GIO_YS				0x2014
 #define HW_REG_ESD_KEY_EN			0x2318
 #define HW_REG_ESD_KEY_DIS			0x2324
 #define HW_REG_CPU_RUN_FROM			0x4506 /* for nor_L is 0x4006 */
-#define HW_REG_CPU_RUN_FROM_YS			0x4000
+#define HW_REG_CPU_RUN_FROM_YS		0x4000
 #define HW_REG_ISP_RUN_FLAG			0x6006
 #define HW_REG_ISP_ADDR				0xC000
 #define HW_REG_ISP_BUFFER			0x6100
 #define HW_REG_SUBSYS_TYPE			0x6020
 #define HW_REG_FLASH_FLAG			0x6022
 #define HW_REG_CACHE				0x204B
-#define HW_REG_ESD_KEY		                0x2318
+#define HW_REG_ESD_KEY				0x2318
 #define HW_REG_WTD_TIMER			0x20B0
 
-#define FLASH_ADDR_CONFIG_DATA			0x1E000
-#define FLASH_SUBSYS_TYPE_CONFIG		0x03
+#define FLASH_ADDR_CONFIG_DATA		0x1E000
+#define FLASH_SUBSYS_TYPE_CONFIG	0x03
 
 #define CPU_CTRL_PENDING			0x00
 #define CPU_CTRL_RUNNING			0x01
@@ -58,13 +59,13 @@
 #define ISP_STAT_WRITING			0xAA
 #define ISP_FLASH_SUCCESS			0xBB
 #define ISP_FLASH_ERROR				0xCC
-#define ISP_FLASH_CHECK_ERROR			0xDD
+#define ISP_FLASH_CHECK_ERROR		0xDD
 #define ISP_CMD_PREPARE				0x55
 #define ISP_CMD_FLASH				0xAA
 
-#define TS_CHECK_ISP_STATE_RETRY_TIMES     200
-#define TS_READ_FLASH_STATE_RETRY_TIMES    200
-
+#define TS_CHECK_ISP_STATE_RETRY_TIMES		200
+#define TS_READ_FLASH_STATE_RETRY_TIMES		200
+extern bool tp_load_ok;
 /**
  * fw_subsys_info - subsytem firmware infomation
  * @type: sybsystem type
@@ -160,22 +161,23 @@ struct fw_update_ctrl {
 	bool allow_resume;
 
 	struct firmware_data fw_data;
-	struct gt9896s_ts_device *ts_dev;
-	struct gt9896s_ts_core *core_data;
+	struct goodix_ts_device *ts_dev;
+	struct goodix_ts_core *core_data;
 
-	char fw_name[64];
+	char fw_name[32];
 	struct bin_attribute attr_fwimage;
 };
-static struct fw_update_ctrl gt9896s_fw_update_ctrl;
+static struct fw_update_ctrl goodix_fw_update_ctrl;
+static struct completion fw_update_module_init_comp;
 /**
- * gt9896s_parse_firmware - parse firmware header infomation
- *	and subsystem infomation from firmware data buffer
+ * goodix_parse_firmware - parse firmware header infomation
+ * and subsystem infomation from firmware data buffer
  *
  * @fw_data: firmware struct, contains firmware header info
- *	and firmware data.
+ * and firmware data.
  * return: 0 - OK, < 0 - error
  */
-static int gt9896s_parse_firmware(struct firmware_data *fw_data)
+static int goodix_parse_firmware(struct firmware_data *fw_data)
 {
 	const struct firmware *firmware;
 	struct firmware_info *fw_info;
@@ -223,7 +225,7 @@ static int gt9896s_parse_firmware(struct firmware_data *fw_data)
 
 	if (fw_info->subsys_num > FW_SUBSYS_MAX_NUM) {
 		ts_err("Bad firmware, invalid subsys num: %d",
-		       fw_info->subsys_num);
+			fw_info->subsys_num);
 		r = -EINVAL;
 		goto err_size;
 	}
@@ -273,16 +275,16 @@ err_size:
 }
 
 /**
- * gt9896s_check_update - compare the version of firmware running in
+ * goodix_check_update - compare the version of firmware running in
  *  touch device with the version getting from the firmware file.
  * @fw_info: firmware infomation to be compared
  * return: 0 no need do update,
  *         otherwise need do update
  */
-static int gt9896s_check_update(struct gt9896s_ts_device *dev,
+static int goodix_check_update(struct goodix_ts_device *dev,
 		const struct firmware_info *fw_info)
 {
-	struct gt9896s_ts_version fw_ver;
+	struct goodix_ts_version fw_ver;
 	int ret = -EINVAL;
 
 	/* read version from chip, if we got invalid
@@ -296,22 +298,14 @@ static int gt9896s_check_update(struct gt9896s_ts_device *dev,
 	}
 
 	if (fw_ver.valid) {
-		// should we compare PID before fw update?
-		// if fw patch demage the PID may unmatch but
-		// we should de update to recover it.
-		// TODO skip PID check
-		/*if (memcmp(fw_ver.pid, fw_info->fw_pid, dev->reg.pid_len)) {
-			ts_err("Product ID is not match %s != %s",
-				fw_ver.pid, fw_info->fw_pid);
-			return -EPERM;
-		}*/
-
 		ret = memcmp(fw_ver.vid, fw_info->fw_vid, dev->reg.vid_len);
 		if (ret == 0) {
 			ts_info("FW version is equal to the IC's");
 			return 0;
 		} else if (ret > 0) {
 			ts_info("Warning: fw version is lower the IC's");
+		} else {
+			ts_info("Warning: fw version is higher the IC's");
 		}
 	} /* else invalid firmware, update firmware */
 
@@ -320,16 +314,16 @@ static int gt9896s_check_update(struct gt9896s_ts_device *dev,
 }
 
 /**
- * gt9896s_reg_write_confirm - write register and confirm the value
+ * goodix_reg_write_confirm - write register and confirm the value
  *  in the register.
  * @dev: pointer to touch device
  * @addr: register address
  * @data: pointer to data buffer
  * @len: data length
  * return: 0 write success and confirm ok
- *		   < 0 failed
+ * < 0 failed
  */
-static int gt9896s_reg_write_confirm(struct gt9896s_ts_device *dev,
+static int goodix_reg_write_confirm(struct goodix_ts_device *dev,
 		unsigned int addr, unsigned char *data, unsigned int len)
 {
 	u8 *cfm, cfm_buf[32];
@@ -375,26 +369,26 @@ exit:
 	return r;
 }
 
-static inline int gt9896s_reg_write(struct gt9896s_ts_device *dev,
+static inline int goodix_reg_write(struct goodix_ts_device *dev,
 		unsigned int addr, unsigned char *data, unsigned int len)
 {
 	return dev->hw_ops->write_trans(dev, addr, data, len);
 }
 
-static inline int gt9896s_reg_read(struct gt9896s_ts_device *dev,
+static inline int goodix_reg_read(struct goodix_ts_device *dev,
 		unsigned int addr, unsigned char *data, unsigned int len)
 {
 	return dev->hw_ops->read_trans(dev, addr, data, len);
 }
 
 /**
- * gt9896s_load_isp - load ISP program to deivce ram
+ * goodix_load_isp - load ISP program to deivce ram
  * @dev: pointer to touch device
  * @fw_data: firmware data
  * return 0 ok, <0 error
  */
-static int gt9896s_load_isp(struct gt9896s_ts_device *ts_dev,
-			   struct firmware_data *fw_data)
+static int goodix_load_isp(struct goodix_ts_device *ts_dev,
+			struct firmware_data *fw_data)
 {
 	struct fw_subsys_info *fw_isp;
 	u8 reg_val[8] = {0x00};
@@ -405,8 +399,8 @@ static int gt9896s_load_isp(struct gt9896s_ts_device *ts_dev,
 
 	ts_info("Loading ISP start");
 	reg_val[0] = 0x00;
-	r = gt9896s_reg_write(ts_dev, HW_REG_BANK_SELECT,
-				     reg_val, 1);
+	r = goodix_reg_write(ts_dev, HW_REG_BANK_SELECT,
+				reg_val, 1);
 	if (r < 0) {
 		ts_err("Failed to select bank0");
 		return r;
@@ -414,16 +408,16 @@ static int gt9896s_load_isp(struct gt9896s_ts_device *ts_dev,
 	ts_debug("Success select bank0, Set 0x%x -->0x00", HW_REG_BANK_SELECT);
 
 	reg_val[0] = 0x01;
-	r = gt9896s_reg_write(ts_dev, HW_REG_ACCESS_PATCH0,
-				     reg_val, 1);
+	r = goodix_reg_write(ts_dev, HW_REG_ACCESS_PATCH0,
+				reg_val, 1);
 	if (r < 0) {
 		ts_err("Failed to enable patch0 access");
 		return r;
 	}
 	ts_debug("Success select bank0, Set 0x%x -->0x01", HW_REG_ACCESS_PATCH0);
 
-	r = gt9896s_reg_write_confirm(ts_dev, HW_REG_ISP_ADDR,
-				     (u8 *)fw_isp->data, fw_isp->size);
+	r = goodix_reg_write_confirm(ts_dev, HW_REG_ISP_ADDR,
+				(u8 *)fw_isp->data, fw_isp->size);
 	if (r < 0) {
 		ts_err("Loading ISP error");
 		return r;
@@ -432,8 +426,8 @@ static int gt9896s_load_isp(struct gt9896s_ts_device *ts_dev,
 	ts_debug("Success send ISP data to IC");
 
 	reg_val[0] = 0x00;
-	r = gt9896s_reg_write_confirm(ts_dev, HW_REG_ACCESS_PATCH0,
-				     reg_val, 1);
+	r = goodix_reg_write_confirm(ts_dev, HW_REG_ACCESS_PATCH0,
+				reg_val, 1);
 	if (r < 0) {
 		ts_err("Failed to disable patch0 access");
 		return r;
@@ -443,7 +437,7 @@ static int gt9896s_load_isp(struct gt9896s_ts_device *ts_dev,
 
 	reg_val[0] = 0x00;
 	reg_val[1] = 0x00;
-	r = gt9896s_reg_write(ts_dev, HW_REG_ISP_RUN_FLAG, reg_val, 2);
+	r = goodix_reg_write(ts_dev, HW_REG_ISP_RUN_FLAG, reg_val, 2);
 	if (r < 0) {
 		ts_err("Failed to clear 0x%x", HW_REG_ISP_RUN_FLAG);
 		return r;
@@ -451,12 +445,11 @@ static int gt9896s_load_isp(struct gt9896s_ts_device *ts_dev,
 	ts_debug("Success clear 0x%x", HW_REG_ISP_RUN_FLAG);
 
 	memset(reg_val, 0x55, 8);
-	if (ts_dev->ic_type == IC_TYPE_YELLOWSTONE ||
-		ts_dev->ic_type == IC_TYPE_YELLOWSTONE_SPI)
-		r = gt9896s_reg_write(ts_dev, HW_REG_CPU_RUN_FROM_YS,
+	if (ts_dev->ic_type == IC_TYPE_YELLOWSTONE)
+		r = goodix_reg_write(ts_dev, HW_REG_CPU_RUN_FROM_YS,
 				reg_val, 8);
 	else
-		r = gt9896s_reg_write(ts_dev, HW_REG_CPU_RUN_FROM,
+		r = goodix_reg_write(ts_dev, HW_REG_CPU_RUN_FROM,
 				reg_val, 8);
 	if (r < 0) {
 		ts_err("Failed set backdoor flag");
@@ -465,8 +458,8 @@ static int gt9896s_load_isp(struct gt9896s_ts_device *ts_dev,
 	ts_info("Success write [8]0x55 to backdoor");
 
 	reg_val[0] = 0x00;
-	r = gt9896s_reg_write(ts_dev, HW_REG_CPU_CTRL,
-				     reg_val, 1);
+	r = goodix_reg_write(ts_dev, HW_REG_CPU_CTRL,
+				reg_val, 1);
 	if (r < 0) {
 		ts_err("Failed to run isp");
 		return r;
@@ -476,8 +469,8 @@ static int gt9896s_load_isp(struct gt9896s_ts_device *ts_dev,
 	/* check isp work state */
 	for (i = 0; i < TS_CHECK_ISP_STATE_RETRY_TIMES; i++) {
 		msleep(10);
-		r = gt9896s_reg_read(ts_dev, HW_REG_ISP_RUN_FLAG,
-				    reg_val, 2);
+		r = goodix_reg_read(ts_dev, HW_REG_ISP_RUN_FLAG,
+				reg_val, 2);
 		if (r < 0 || (reg_val[0] == 0xAA && reg_val[1] == 0xBB))
 			break;
 	}
@@ -491,28 +484,26 @@ static int gt9896s_load_isp(struct gt9896s_ts_device *ts_dev,
 	return -EFAULT;
 }
 
-int gt9896s_reset_ic_init(struct gt9896s_ts_device *ts_dev);
 /**
- * gt9896s_update_prepare - update prepare, loading ISP program
+ * goodix_update_prepare - update prepare, loading ISP program
  *  and make sure the ISP is running.
  * @fwu_ctrl: pointer to fimrware control structure
  * return: 0 ok, <0 error
  */
-static int gt9896s_update_prepare(struct fw_update_ctrl *fwu_ctrl)
+static int goodix_update_prepare(struct fw_update_ctrl *fwu_ctrl)
 {
-	struct gt9896s_ts_device *ts_dev = fwu_ctrl->ts_dev;
+	struct goodix_ts_device *ts_dev = fwu_ctrl->ts_dev;
 	u8 reg_val[4] = { 0x00 };
 	u8 temp_buf[] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
 	int retry = 20;
 	int r;
 
-	if (ts_dev->ic_type == IC_TYPE_YELLOWSTONE ||
-		ts_dev->ic_type == IC_TYPE_YELLOWSTONE_SPI)
+	if (ts_dev->ic_type == IC_TYPE_YELLOWSTONE)
 		ts_dev->hw_ops->write(ts_dev, HW_REG_CPU_RUN_FROM_YS,
-				      temp_buf, 8);
+				temp_buf, 8);
 	else
 		ts_dev->hw_ops->write(ts_dev, HW_REG_CPU_RUN_FROM,
-				      temp_buf, 8);
+				temp_buf, 8);
 
 	/*reset IC*/
 	fwu_ctrl->allow_reset = true;
@@ -523,42 +514,36 @@ static int gt9896s_update_prepare(struct fw_update_ctrl *fwu_ctrl)
 	usleep_range(10000, 11000);
 	fwu_ctrl->allow_reset = false;
 
-	if (ts_dev->ic_type == IC_TYPE_YELLOWSTONE_SPI) {
-		r = gt9896s_reset_ic_init(ts_dev);
+	retry = 100;
+	do {
+		if (ts_dev->ic_type != IC_TYPE_YELLOWSTONE)
+			break;
+		reg_val[0] = 0x00;
+		r = goodix_reg_write_confirm(ts_dev, HW_REG_GIO_YS,
+					reg_val, 1);
 		if (r < 0) {
-			ts_err("Failed to reset ic init!");
-			return -EINVAL;
+			ts_info("Failed to remove GIO hold flag, retry %d", retry);
+		} else {
+			break;
 		}
-	} else if (ts_dev->ic_type == IC_TYPE_YELLOWSTONE) {
-		retry = 100;
-		do {
-			reg_val[0] = 0x00;
-			r = gt9896s_reg_write_confirm(ts_dev, HW_REG_GIO_YS,
-						     reg_val, 1);
-			if (r < 0)
-				ts_info("Failed to remove GIO hold flag, retry %d", retry);
-			else
-				break;
-		} while (--retry);
-		if (!retry) {
-			ts_err("Failed to remove GIO flag");
-			return -EINVAL;
-		}
+	} while (--retry);
+	if (!retry) {
+		ts_err("Failed to remove GIO flag");
+		return -EINVAL;
 	}
 
 	retry = 20;
 	for (retry = 0; retry < 20; retry++) {
-		if (ts_dev->ic_type == IC_TYPE_YELLOWSTONE ||
-			ts_dev->ic_type == IC_TYPE_YELLOWSTONE_SPI) {
+		if (ts_dev->ic_type == IC_TYPE_YELLOWSTONE) {
 			reg_val[0] = 0x00;
-			r = gt9896s_reg_write(ts_dev, HW_REG_ESD_KEY_DIS,
+			r = goodix_reg_write(ts_dev, HW_REG_ESD_KEY_DIS,
 					reg_val, 1);
 			if (r < 0) {
 				ts_info("failed dis esd key");
 				continue;
 			}
 			reg_val[0] = 0x95;
-			r = gt9896s_reg_write(ts_dev, HW_REG_ESD_KEY_EN,
+			r = goodix_reg_write(ts_dev, HW_REG_ESD_KEY_EN,
 				reg_val, 1);
 			if (r < 0) {
 				ts_info("failed open esd key");
@@ -566,8 +551,8 @@ static int gt9896s_update_prepare(struct fw_update_ctrl *fwu_ctrl)
 			}
 		}
 		reg_val[0] = 0x24;
-		r = gt9896s_reg_write_confirm(ts_dev, HW_REG_CPU_CTRL,
-					     reg_val, 1);
+		r = goodix_reg_write_confirm(ts_dev, HW_REG_CPU_CTRL,
+					reg_val, 1);
 		if (r < 0) {
 			ts_info("Failed to hold ss51, retry");
 			msleep(20);
@@ -583,7 +568,7 @@ static int gt9896s_update_prepare(struct fw_update_ctrl *fwu_ctrl)
 
 	/* enable DSP & MCU power */
 	reg_val[0] = 0x00;
-	r = gt9896s_reg_write_confirm(ts_dev, HW_REG_DSP_MCU_POWER, reg_val, 1);
+	r = goodix_reg_write_confirm(ts_dev, HW_REG_DSP_MCU_POWER, reg_val, 1);
 	if (r < 0) {
 		ts_err("Failed enable DSP&MCU power");
 		return r;
@@ -593,25 +578,24 @@ static int gt9896s_update_prepare(struct fw_update_ctrl *fwu_ctrl)
 
 	/* disable watchdog timer */
 	reg_val[0] = 0x00;
-	r = gt9896s_reg_write(ts_dev, HW_REG_CACHE, reg_val, 1);
+	r = goodix_reg_write(ts_dev, HW_REG_CACHE, reg_val, 1);
 	if (r < 0) {
 		ts_err("Failed to clear cache");
 		return r;
 	}
 	ts_debug("Success clear cache");
 
-	if (ts_dev->ic_type == IC_TYPE_YELLOWSTONE ||
-		ts_dev->ic_type == IC_TYPE_YELLOWSTONE_SPI) {
+	if (ts_dev->ic_type == IC_TYPE_YELLOWSTONE) {
 		reg_val[0] = 0x00;
-		r = gt9896s_reg_write(ts_dev, HW_REG_WTD_TIMER, reg_val, 1);
+		r = goodix_reg_write(ts_dev, HW_REG_WTD_TIMER, reg_val, 1);
 	} else {
 		reg_val[0] = 0x95;
-		r = gt9896s_reg_write(ts_dev, HW_REG_ESD_KEY, reg_val, 1);
+		r = goodix_reg_write(ts_dev, HW_REG_ESD_KEY, reg_val, 1);
 		reg_val[0] = 0x00;
-		r |= gt9896s_reg_write(ts_dev, HW_REG_WTD_TIMER, reg_val, 1);
+		r |= goodix_reg_write(ts_dev, HW_REG_WTD_TIMER, reg_val, 1);
 
 		reg_val[0] = 0x27;
-		r |= gt9896s_reg_write(ts_dev, HW_REG_ESD_KEY, reg_val, 1);
+		r |= goodix_reg_write(ts_dev, HW_REG_ESD_KEY, reg_val, 1);
 	}
 	if (r < 0) {
 		ts_err("Failed to disable watchdog");
@@ -621,7 +605,7 @@ static int gt9896s_update_prepare(struct fw_update_ctrl *fwu_ctrl)
 
 	/* set scramble */
 	reg_val[0] = 0x00;
-	r = gt9896s_reg_write(ts_dev, HW_REG_SCRAMBLE, reg_val, 1);
+	r = goodix_reg_write(ts_dev, HW_REG_SCRAMBLE, reg_val, 1);
 	if (r < 0) {
 		ts_err("Failed to set scramble");
 		return r;
@@ -629,7 +613,7 @@ static int gt9896s_update_prepare(struct fw_update_ctrl *fwu_ctrl)
 	ts_debug("Succcess set scramble");
 
 	/* load ISP code and run form isp */
-	r = gt9896s_load_isp(ts_dev, &fwu_ctrl->fw_data);
+	r = goodix_load_isp(ts_dev, &fwu_ctrl->fw_data);
 	if (r < 0)
 		ts_err("Failed lode and run isp");
 
@@ -637,14 +621,14 @@ static int gt9896s_update_prepare(struct fw_update_ctrl *fwu_ctrl)
 }
 
 /**
- * gt9896s_format_fw_packet - formate one flash packet
+ * goodix_format_fw_packet - formate one flash packet
  * @pkt: target firmware packet
  * @flash_addr: flash address
  * @size: packet size
  * @data: packet data
  */
-static int gt9896s_format_fw_packet(u8 *pkt, u32 flash_addr,
-				   u16 len, const u8 *data)
+static int goodix_format_fw_packet(u8 *pkt, u32 flash_addr,
+				u16 len, const u8 *data)
 {
 	u16 checksum;
 
@@ -669,13 +653,13 @@ static int gt9896s_format_fw_packet(u8 *pkt, u32 flash_addr,
 }
 
 /**
- * gt9896s_send_fw_packet - send one firmware packet to ISP
+ * goodix_send_fw_packet - send one firmware packet to ISP
  * @dev: target touch device
  * @pkt: firmware packet
  * return：0 ok, <0 error
  */
-static int gt9896s_send_fw_packet(struct gt9896s_ts_device *dev, u8 type,
-				 u8 *pkt, u32 len)
+static int goodix_send_fw_packet(struct goodix_ts_device *dev, u8 type,
+				u8 *pkt, u32 len)
 {
 	u8 reg_val[4];
 	int r, i;
@@ -684,7 +668,7 @@ static int gt9896s_send_fw_packet(struct gt9896s_ts_device *dev, u8 type,
 		return -EINVAL;
 
 	ts_info("target fw subsys type:0x%x, len %d", type, len);
-	r = gt9896s_reg_write_confirm(dev, HW_REG_ISP_BUFFER, pkt, len);
+	r = goodix_reg_write_confirm(dev, HW_REG_ISP_BUFFER, pkt, len);
 	if (r < 0) {
 		ts_err("Failed to write firmware packet");
 		return r;
@@ -693,7 +677,7 @@ static int gt9896s_send_fw_packet(struct gt9896s_ts_device *dev, u8 type,
 	reg_val[0] = 0;
 	reg_val[1] = 0;
 	/* clear flash flag 0X6022 */
-	r = gt9896s_reg_write_confirm(dev, HW_REG_FLASH_FLAG, reg_val, 2);
+	r = goodix_reg_write_confirm(dev, HW_REG_FLASH_FLAG, reg_val, 2);
 	if (r < 0) {
 		ts_err("Faile to clear flash flag");
 		return r;
@@ -702,14 +686,14 @@ static int gt9896s_send_fw_packet(struct gt9896s_ts_device *dev, u8 type,
 	/* write subsystem type 0X8020*/
 	reg_val[0] = type;
 	reg_val[1] = type;
-	r = gt9896s_reg_write_confirm(dev, HW_REG_SUBSYS_TYPE, reg_val, 2);
+	r = goodix_reg_write_confirm(dev, HW_REG_SUBSYS_TYPE, reg_val, 2);
 	if (r < 0) {
 		ts_err("Failed write subsystem type to IC");
 		return r;
 	}
 
 	for (i = 0; i < TS_READ_FLASH_STATE_RETRY_TIMES; i++) {
-		r = gt9896s_reg_read(dev, HW_REG_FLASH_FLAG, reg_val, 2);
+		r = goodix_reg_read(dev, HW_REG_FLASH_FLAG, reg_val, 2);
 		if (r < 0) {
 			ts_err("Failed read flash state");
 			return r;
@@ -717,16 +701,16 @@ static int gt9896s_send_fw_packet(struct gt9896s_ts_device *dev, u8 type,
 
 		/* flash haven't end */
 		if (reg_val[0] == ISP_STAT_WRITING &&
-		    reg_val[1] == ISP_STAT_WRITING) {
+			reg_val[1] == ISP_STAT_WRITING) {
 			ts_debug("Flash not ending...");
 			usleep_range(55000, 56000);
 			continue;
 		}
 		if (reg_val[0] == ISP_FLASH_SUCCESS &&
-		    reg_val[1] == ISP_FLASH_SUCCESS) {
-			r = gt9896s_reg_read(dev, HW_REG_FLASH_FLAG, reg_val, 2);
+			reg_val[1] == ISP_FLASH_SUCCESS) {
+			r = goodix_reg_read(dev, HW_REG_FLASH_FLAG, reg_val, 2);
 			if (!r && reg_val[0] == ISP_FLASH_SUCCESS &&
-			    reg_val[1] == ISP_FLASH_SUCCESS) {
+				reg_val[1] == ISP_FLASH_SUCCESS) {
 				ts_info("Flash subsystem ok");
 				return 0;
 			}
@@ -740,7 +724,6 @@ static int gt9896s_send_fw_packet(struct gt9896s_ts_device *dev, u8 type,
 			ts_err("Subsystem checksum err");
 			return -EAGAIN;
 		}
-
 		usleep_range(250, 260);
 	}
 
@@ -750,16 +733,16 @@ static int gt9896s_send_fw_packet(struct gt9896s_ts_device *dev, u8 type,
 }
 
 /**
- * gt9896s_flash_subsystem - flash subsystem firmware,
+ * goodix_flash_subsystem - flash subsystem firmware,
  *  Main flow of flashing firmware.
- *	Each firmware subsystem is divided into several
- *	packets, the max size of packet is limited to
- *	@{ISP_MAX_BUFFERSIZE}
+ * Each firmware subsystem is divided into several
+ * packets, the max size of packet is limited to
+ * @{ISP_MAX_BUFFERSIZE}
  * @dev: pointer to touch device
  * @subsys: subsystem infomation
  * return: 0 ok, < 0 error
  */
-static int gt9896s_flash_subsystem(struct gt9896s_ts_device *dev,
+static int goodix_flash_subsystem(struct goodix_ts_device *dev,
 				struct fw_subsys_info *subsys)
 {
 	u16 data_size, offset;
@@ -783,12 +766,12 @@ static int gt9896s_flash_subsystem(struct gt9896s_ts_device *dev,
 	offset = 0;
 	while (total_size > 0) {
 		data_size = total_size > ISP_MAX_BUFFERSIZE ?
-				ISP_MAX_BUFFERSIZE : total_size;
+			ISP_MAX_BUFFERSIZE : total_size;
 		ts_info("Flash firmware to %08x,size:%u bytes",
 			subsys_base_addr + offset, data_size);
 
 		/* format one firmware packet */
-		r = gt9896s_format_fw_packet(fw_packet, subsys_base_addr + offset,
+		r = goodix_format_fw_packet(fw_packet, subsys_base_addr + offset,
 				data_size, &subsys->data[offset]);
 		if (r < 0) {
 			ts_err("Invalid packet params");
@@ -797,8 +780,8 @@ static int gt9896s_flash_subsystem(struct gt9896s_ts_device *dev,
 
 		/* send one firmware packet, retry 3 time if send failed */
 		for (i = 0; i < 3; i++) {
-			r = gt9896s_send_fw_packet(dev, subsys->type,
-						  fw_packet, data_size + 6);
+			r = goodix_send_fw_packet(dev, subsys->type,
+						fw_packet, data_size + 6);
 			if (!r)
 				break;
 		}
@@ -816,12 +799,12 @@ exit:
 }
 
 /**
- * gt9896s_flash_firmware - flash firmware
+ * goodix_flash_firmware - flash firmware
  * @dev: pointer to touch device
  * @fw_data: firmware data
  * return: 0 ok, < 0 error
  */
-static int gt9896s_flash_firmware(struct gt9896s_ts_device *dev,
+static int goodix_flash_firmware(struct goodix_ts_device *dev,
 				struct firmware_data *fw_data)
 {
 	struct fw_update_ctrl *fw_ctrl;
@@ -845,7 +828,7 @@ static int gt9896s_flash_firmware(struct gt9896s_ts_device *dev,
 	for (i = 1; i < fw_num && retry;) {
 		ts_info("--- Start to flash subsystem[%d] ---", i);
 		fw_x = &fw_info->subsys[i];
-		r = gt9896s_flash_subsystem(dev, fw_x);
+		r = goodix_flash_subsystem(dev, fw_x);
 		if (r == 0) {
 			ts_info("--- End flash subsystem[%d]: OK ---", i);
 			fw_ctrl->progress += prog_step;
@@ -869,12 +852,12 @@ static int gt9896s_flash_firmware(struct gt9896s_ts_device *dev,
 }
 
 /**
- * gt9896s_update_finish - update finished, free resource
+ * goodix_update_finish - update finished, free resource
  *  and reset flags---
  * @fwu_ctrl: pointer to fw_update_ctrl structrue
  * return: 0 ok, < 0 error
  */
-static int gt9896s_update_finish(struct gt9896s_ts_device *ts_dev,
+static int goodix_update_finish(struct goodix_ts_device *ts_dev,
 				struct fw_update_ctrl *fwu_ctrl)
 {
 	u8 reg_val[8] = {0};
@@ -882,20 +865,19 @@ static int gt9896s_update_finish(struct gt9896s_ts_device *ts_dev,
 
 	/* hold ss51 */
 	reg_val[0] = 0x24;
-	r = gt9896s_reg_write(ts_dev, HW_REG_CPU_CTRL,
-				     reg_val, 1);
+	r = goodix_reg_write(ts_dev, HW_REG_CPU_CTRL,
+				reg_val, 1);
 	if (r < 0)
 		ts_err("Failed to hold ss51");
 
 	/* clear back door flag */
 	memset(reg_val, 0, sizeof(reg_val));
-	if (ts_dev->ic_type == IC_TYPE_YELLOWSTONE ||
-		ts_dev->ic_type == IC_TYPE_YELLOWSTONE_SPI)
-		r = gt9896s_reg_write(ts_dev, HW_REG_CPU_RUN_FROM_YS,
-				     reg_val, 8);
+	if (ts_dev->ic_type == IC_TYPE_YELLOWSTONE)
+		r = goodix_reg_write(ts_dev, HW_REG_CPU_RUN_FROM_YS,
+				reg_val, 8);
 	else
-		r = gt9896s_reg_write(ts_dev, HW_REG_CPU_RUN_FROM,
-				     reg_val, 8);
+		r = goodix_reg_write(ts_dev, HW_REG_CPU_RUN_FROM,
+				reg_val, 8);
 	if (r) {
 		ts_err("Failed set CPU run from normal firmware");
 		return r;
@@ -903,7 +885,7 @@ static int gt9896s_update_finish(struct gt9896s_ts_device *ts_dev,
 
 	/* release ss51 */
 	reg_val[0] = 0x00;
-	r = gt9896s_reg_write(ts_dev, HW_REG_CPU_CTRL, reg_val, 1);
+	r = goodix_reg_write(ts_dev, HW_REG_CPU_CTRL, reg_val, 1);
 	if (r < 0)
 		ts_err("Failed to run ss51");
 
@@ -913,34 +895,27 @@ static int gt9896s_update_finish(struct gt9896s_ts_device *ts_dev,
 	gpio_direction_output(ts_dev->board_data.reset_gpio, 1);
 	msleep(80);
 
-	if (ts_dev->ic_type == IC_TYPE_YELLOWSTONE) {
-		for (i = 0; i < 100; i++) {
-			reg_val[0] = 0x00;
-			r = gt9896s_reg_write_confirm(ts_dev, HW_REG_GIO_YS,
-							reg_val, 1);
-			if (!r)
-				break;
-			ts_info("failed set GIO flag, r %d", r);
-		}
-		if (i >= 100)
-			ts_err("failed set GIO flag, %d", r);
-	} else if (ts_dev->ic_type == IC_TYPE_YELLOWSTONE_SPI) {
-		r = gt9896s_reset_ic_init(ts_dev);
-		if (r < 0)
-			ts_err("Failed to reset ic init!");
+	for (i = 0; ts_dev->ic_type == IC_TYPE_YELLOWSTONE && i < 100; i++) {
+		reg_val[0] = 0x00;
+		r = goodix_reg_write_confirm(ts_dev, HW_REG_GIO_YS, reg_val, 1);
+		if (!r)
+			break;
+		ts_info("failed set GIO flag, r %d", r);
 	}
+	if (i >= 100)
+		ts_err("failed set GIO flag, %d", r);
 
 	return r;
 }
 
-static int gt9896s_flash_config(struct gt9896s_ts_device *ts_dev)
+static int goodix_flash_config(struct goodix_ts_device *ts_dev)
 {
 	int ret;
 	u8 *fw_packet = NULL;
 	u8 *temp_data = NULL;
 
 	if (!ts_dev || !ts_dev->cfg_bin_state ||
-	    !ts_dev->normal_cfg.initialized) {
+		!ts_dev->normal_cfg.initialized) {
 		ts_err("no valid config data for flash");
 		return -EINVAL;
 	}
@@ -958,7 +933,7 @@ static int gt9896s_flash_config(struct gt9896s_ts_device *ts_dev)
 	memcpy(temp_data, ts_dev->normal_cfg.data, ts_dev->normal_cfg.length);
 
 	/* format one firmware packet */
-	ret = gt9896s_format_fw_packet(fw_packet, FLASH_ADDR_CONFIG_DATA,
+	ret = goodix_format_fw_packet(fw_packet, FLASH_ADDR_CONFIG_DATA,
 			ISP_MAX_BUFFERSIZE, temp_data);
 	if (ret < 0) {
 		ts_err("Invalid packet params");
@@ -966,12 +941,13 @@ static int gt9896s_flash_config(struct gt9896s_ts_device *ts_dev)
 	}
 	ts_debug("fw_pack:%*ph", 10, fw_packet);
 	ts_info("try flash config");
-	ret = gt9896s_send_fw_packet(ts_dev, FLASH_SUBSYS_TYPE_CONFIG,
-				  fw_packet, ISP_MAX_BUFFERSIZE + 6);
-	if (ret)
+	ret = goodix_send_fw_packet(ts_dev, FLASH_SUBSYS_TYPE_CONFIG,
+				fw_packet, ISP_MAX_BUFFERSIZE + 6);
+	if (ret) {
 		ts_err("failed flash config, ret %d", ret);
-	else
+	} else {
 		ts_info("success flash config with isp");
+	}
 
 exit:
 	kfree(temp_data);
@@ -980,12 +956,12 @@ exit:
 }
 
 /**
- * gt9896s_fw_update_proc - firmware update process, the entry of
+ * goodix_fw_update_proc - firmware update process, the entry of
  *  firmware update flow
  * @fwu_ctrl: firmware control
  * return: 0 ok, < 0 error
  */
-static int gt9896s_fw_update_proc(struct fw_update_ctrl *fwu_ctrl)
+static int goodix_fw_update_proc(struct fw_update_ctrl *fwu_ctrl)
 {
 #define FW_UPDATE_RETRY		2
 	int retry0 = FW_UPDATE_RETRY;
@@ -1001,7 +977,7 @@ static int gt9896s_fw_update_proc(struct fw_update_ctrl *fwu_ctrl)
 	fwu_ctrl->progress = 0;
 	fwu_ctrl->status = UPSTA_PREPARING;
 
-	r = gt9896s_parse_firmware(&fwu_ctrl->fw_data);
+	r = goodix_parse_firmware(&fwu_ctrl->fw_data);
 	if (r < 0) {
 		fwu_ctrl->status = UPSTA_ABORT;
 		goto err_parse_fw;
@@ -1009,7 +985,7 @@ static int gt9896s_fw_update_proc(struct fw_update_ctrl *fwu_ctrl)
 
 	fwu_ctrl->progress = 10;
 	if (!(fwu_ctrl->mode & UPDATE_MODE_FORCE)) {
-		r = gt9896s_check_update(fwu_ctrl->ts_dev,
+		r = goodix_check_update(fwu_ctrl->ts_dev,
 					&fwu_ctrl->fw_data.fw_info);
 		if (!r) {
 			fwu_ctrl->status = UPSTA_ABORT;
@@ -1023,7 +999,7 @@ static int gt9896s_fw_update_proc(struct fw_update_ctrl *fwu_ctrl)
 start_update:
 	fwu_ctrl->progress = 20;
 	fwu_ctrl->status = UPSTA_UPDATING; /* show upgrading status */
-	r = gt9896s_update_prepare(fwu_ctrl);
+	r = goodix_update_prepare(fwu_ctrl);
 	if ((r == -EBUS || r == -EAGAIN) && --retry0 > 0) {
 		ts_err("Bus error, retry prepare ISP:%d",
 			FW_UPDATE_RETRY - retry0);
@@ -1035,13 +1011,13 @@ start_update:
 	}
 
 	if (GOODIX_FLASH_CONFIG_WITH_ISP &&
-	    fwu_ctrl->mode & UPDATE_MODE_FLASH_CFG) {
+		fwu_ctrl->mode & UPDATE_MODE_FLASH_CFG) {
 		ts_info("need flash config with isp");
-		gt9896s_flash_config(fwu_ctrl->ts_dev);
+		goodix_flash_config(fwu_ctrl->ts_dev);
 	}
 
 	/* progress: 20%~100% */
-	r = gt9896s_flash_firmware(fwu_ctrl->ts_dev, &fwu_ctrl->fw_data);
+	r = goodix_flash_firmware(fwu_ctrl->ts_dev, &fwu_ctrl->fw_data);
 	if ((r == -EBUS || r == -ETIMEOUT) && --retry1 > 0) {
 		/* we will retry[twice] if returns bus error[i2c/spi]
 		 * we will do hardware reset and re-prepare ISP and then retry
@@ -1060,29 +1036,29 @@ start_update:
 
 err_fw_flash:
 err_fw_prepare:
-	gt9896s_update_finish(fwu_ctrl->ts_dev, fwu_ctrl);
+	goodix_update_finish(fwu_ctrl->ts_dev, fwu_ctrl);
 err_check_update:
 err_parse_fw:
-	if (fwu_ctrl->status == UPSTA_SUCCESS)
+	if (fwu_ctrl->status == UPSTA_SUCCESS) {
 		ts_info("Firmware update successfully");
-	else if (fwu_ctrl->status == UPSTA_FAILED)
+	} else if (fwu_ctrl->status == UPSTA_FAILED) {
 		ts_err("Firmware update failed");
-
+	}
 	fwu_ctrl->progress = 100; /* 100% */
 	ts_info("fw update ret %d", r);
 	return r;
 }
 
-static struct gt9896s_ext_module gt9896s_fwu_module;
+static struct goodix_ext_module goodix_fwu_module;
 
 /**
- * gt9896s_request_firmware - request firmware data from user space
+ * goodix_request_firmware - request firmware data from user space
  *
  * @fw_data: firmware struct, contains firmware header info
  *	and firmware data pointer.
  * return: 0 - OK, < 0 - error
  */
-static int gt9896s_request_firmware(struct firmware_data *fw_data,
+static int goodix_request_firmware(struct firmware_data *fw_data,
 				const char *name)
 {
 	struct fw_update_ctrl *fw_ctrl =
@@ -1092,10 +1068,11 @@ static int gt9896s_request_firmware(struct firmware_data *fw_data,
 
 	ts_info("Request firmware image [%s]", name);
 	r = request_firmware(&fw_data->firmware, name, dev);
-	if (r < 0)
+	if (r < 0) {
 		ts_err("Firmware image [%s] not available,errno:%d", name, r);
-	else
+	} else {
 		ts_info("Firmware image [%s] is ready", name);
+	}
 	return r;
 }
 
@@ -1103,7 +1080,7 @@ static int gt9896s_request_firmware(struct firmware_data *fw_data,
  * relase firmware resources
  *
  */
-static inline void gt9896s_release_firmware(struct firmware_data *fw_data)
+static inline void goodix_release_firmware(struct firmware_data *fw_data)
 {
 	if (fw_data->firmware) {
 		release_firmware(fw_data->firmware);
@@ -1111,12 +1088,11 @@ static inline void gt9896s_release_firmware(struct firmware_data *fw_data)
 	}
 }
 
-static int gt9896s_fw_update_thread(void *data)
+static int goodix_fw_update_thread(void *data)
 {
 	struct fw_update_ctrl *fwu_ctrl = data;
 	struct firmware *temp_firmware = NULL;
 	int r = -EINVAL;
-	struct fw_update_ctrl *fw_ctrl = &gt9896s_fw_update_ctrl;
 
 	mutex_lock(&fwu_ctrl->mutex);
 
@@ -1127,12 +1103,12 @@ static int gt9896s_fw_update_thread(void *data)
 			ts_err("Failed to allocate memory for firmware");
 			goto out;
 		}
-		temp_firmware->size = sizeof(gt9896s_default_fw);
-		temp_firmware->data = gt9896s_default_fw;
+		temp_firmware->size = sizeof(goodix_default_fw);
+		temp_firmware->data = goodix_default_fw;
 		fwu_ctrl->fw_data.firmware = temp_firmware;
 	} else if (fwu_ctrl->mode & UPDATE_MODE_SRC_REQUEST) {
 		ts_info("Firmware request update starts");
-		r = gt9896s_request_firmware(&fwu_ctrl->fw_data,
+		r = goodix_request_firmware(&fwu_ctrl->fw_data,
 						fwu_ctrl->fw_name);
 		if (r < 0) {
 			fwu_ctrl->status = UPSTA_ABORT;
@@ -1153,20 +1129,18 @@ static int gt9896s_fw_update_thread(void *data)
 		goto out;
 	}
 
-	if (!fw_ctrl->initialized)
-		gt9896s_register_ext_module(&gt9896s_fwu_module);
-
+	goodix_register_ext_module(&goodix_fwu_module);
 	/* DONT allow reset/irq/suspend/resume during update */
 	fwu_ctrl->allow_irq = false;
 	fwu_ctrl->allow_suspend = false;
 	fwu_ctrl->allow_resume = false;
 	fwu_ctrl->allow_reset = false;
 	ts_debug("notify update start");
-	gt9896s_ts_blocking_notify(NOTIFY_FWUPDATE_START, NULL);
+	goodix_ts_blocking_notify(NOTIFY_FWUPDATE_START, NULL);
 
 	/* ready to update */
 	ts_debug("start update proc");
-	r = gt9896s_fw_update_proc(fwu_ctrl);
+	r = goodix_fw_update_proc(fwu_ctrl);
 
 	fwu_ctrl->allow_reset = true;
 	fwu_ctrl->allow_irq = true;
@@ -1179,7 +1153,7 @@ static int gt9896s_fw_update_thread(void *data)
 		fwu_ctrl->fw_data.firmware = NULL;
 		temp_firmware = NULL;
 	} else if (fwu_ctrl->mode & UPDATE_MODE_SRC_REQUEST) {
-		gt9896s_release_firmware(&fwu_ctrl->fw_data);
+		goodix_release_firmware(&fwu_ctrl->fw_data);
 	} else if (fwu_ctrl->mode & UPDATE_MODE_SRC_SYSFS) {
 		vfree(fwu_ctrl->fw_data.firmware);
 		fwu_ctrl->fw_data.firmware = NULL;
@@ -1188,27 +1162,27 @@ static int gt9896s_fw_update_thread(void *data)
 out:
 	fwu_ctrl->mode = UPDATE_MODE_DEFAULT;
 	mutex_unlock(&fwu_ctrl->mutex);
-	gt9896s_unregister_ext_module(&gt9896s_fwu_module);
+	goodix_unregister_ext_module(&goodix_fwu_module);
 
 	if (r) {
 		ts_err("fw update failed, %d", r);
-		gt9896s_ts_blocking_notify(NOTIFY_FWUPDATE_FAILED, NULL);
+		goodix_ts_blocking_notify(NOTIFY_FWUPDATE_FAILED, NULL);
 	} else {
 		ts_info("fw update success");
-		gt9896s_ts_blocking_notify(NOTIFY_FWUPDATE_SUCCESS, NULL);
+		goodix_ts_blocking_notify(NOTIFY_FWUPDATE_SUCCESS, NULL);
 	}
 	return r;
 }
 
 /*
- * gt9896s_sysfs_update_en_store: start fw update manually
+ * goodix_sysfs_update_en_store: start fw update manually
  * @buf: '1'[001] update in blocking mode with fwdata from sysfs
  *       '2'[010] update in blocking mode with fwdata from request
  *       '5'[101] update in unblocking mode with fwdata from sysfs
  *       '6'[110] update in unblocking mode with fwdata from request
  */
-static ssize_t gt9896s_sysfs_update_en_store(
-		struct gt9896s_ext_module *module,
+static ssize_t goodix_sysfs_update_en_store(
+		struct goodix_ext_module *module,
 		const char *buf, size_t count)
 {
 	int ret = 0;
@@ -1238,7 +1212,7 @@ static ssize_t gt9896s_sysfs_update_en_store(
 		return -EINVAL;
 	}
 
-	ret = gt9896s_do_fw_update(mode);
+	ret = goodix_do_fw_update(mode);
 	if (!ret) {
 		ts_info("success start update work");
 		return count;
@@ -1247,16 +1221,16 @@ static ssize_t gt9896s_sysfs_update_en_store(
 	return -EINVAL;
 }
 
-static ssize_t gt9896s_sysfs_update_progress_show(
-		struct gt9896s_ext_module *module,
+static ssize_t goodix_sysfs_update_progress_show(
+		struct goodix_ext_module *module,
 		char *buf)
 {
 	struct fw_update_ctrl *fw_ctrl = module->priv_data;
 	return scnprintf(buf, PAGE_SIZE, "%d\n", fw_ctrl->progress);
 }
 
-static ssize_t gt9896s_sysfs_update_result_show(
-		struct gt9896s_ext_module *module,
+static ssize_t goodix_sysfs_update_result_show(
+		struct goodix_ext_module *module,
 		char *buf)
 {
 	char *result = NULL;
@@ -1289,11 +1263,11 @@ static ssize_t gt9896s_sysfs_update_result_show(
 	return scnprintf(buf, PAGE_SIZE, "%s\n", result);
 }
 
-static ssize_t gt9896s_sysfs_update_fwversion_show(
-		struct gt9896s_ext_module *module,
+static ssize_t goodix_sysfs_update_fwversion_show(
+		struct goodix_ext_module *module,
 		char *buf)
 {
-	struct gt9896s_ts_version fw_ver;
+	struct goodix_ts_version fw_ver;
 	struct fw_update_ctrl *fw_ctrl = module->priv_data;
 	int r = 0;
 	char str[5];
@@ -1311,7 +1285,7 @@ static ssize_t gt9896s_sysfs_update_fwversion_show(
 	return 0;
 }
 
-static ssize_t gt9896s_sysfs_fwsize_show(struct gt9896s_ext_module *module,
+static ssize_t goodix_sysfs_fwsize_show(struct goodix_ext_module *module,
 		char *buf)
 {
 	struct fw_update_ctrl *fw_ctrl = module->priv_data;
@@ -1323,7 +1297,7 @@ static ssize_t gt9896s_sysfs_fwsize_show(struct gt9896s_ext_module *module,
 	return r;
 }
 
-static ssize_t gt9896s_sysfs_fwsize_store(struct gt9896s_ext_module *module,
+static ssize_t goodix_sysfs_fwsize_store(struct goodix_ext_module *module,
 		const char *buf, size_t count)
 {
 	struct fw_update_ctrl *fw_ctrl = module->priv_data;
@@ -1357,7 +1331,7 @@ static ssize_t gt9896s_sysfs_fwsize_store(struct gt9896s_ext_module *module,
 	return count;
 }
 
-static ssize_t gt9896s_sysfs_fwimage_store(struct file *file,
+static ssize_t goodix_sysfs_fwimage_store(struct file *file,
 		struct kobject *kobj, struct bin_attribute *attr,
 		char *buf, loff_t pos, size_t count)
 {
@@ -1368,7 +1342,7 @@ static ssize_t gt9896s_sysfs_fwimage_store(struct file *file,
 			attr_fwimage);
 	fw_data = &fw_ctrl->fw_data;
 
-	if ((!fw_data->firmware) || (!buf)) {
+	if (!fw_data->firmware) {
 		ts_err("Need set fw image size first");
 		return -ENOMEM;
 	}
@@ -1387,33 +1361,33 @@ static ssize_t gt9896s_sysfs_fwimage_store(struct file *file,
 }
 
 /* this interface has ben deprecated */
-static ssize_t gt9896s_sysfs_force_update_store(
-		struct gt9896s_ext_module *module,
+static ssize_t goodix_sysfs_force_update_store(
+		struct goodix_ext_module *module,
 		const char *buf, size_t count)
 {
 	return count;
 }
 
-static struct gt9896s_ext_attribute gt9896s_fwu_attrs[] = {
-	__EXTMOD_ATTR(update_en, 0220, NULL, gt9896s_sysfs_update_en_store),
-	__EXTMOD_ATTR(progress, S_IRUGO, gt9896s_sysfs_update_progress_show, NULL),
-	__EXTMOD_ATTR(result, S_IRUGO, gt9896s_sysfs_update_result_show, NULL),
+static struct goodix_ext_attribute goodix_fwu_attrs[] = {
+	__EXTMOD_ATTR(update_en, S_IWUGO, NULL, goodix_sysfs_update_en_store),
+	__EXTMOD_ATTR(progress, S_IRUGO, goodix_sysfs_update_progress_show, NULL),
+	__EXTMOD_ATTR(result, S_IRUGO, goodix_sysfs_update_result_show, NULL),
 	__EXTMOD_ATTR(fwversion, S_IRUGO,
-			gt9896s_sysfs_update_fwversion_show, NULL),
-	__EXTMOD_ATTR(fwsize, 0660, gt9896s_sysfs_fwsize_show,
-			gt9896s_sysfs_fwsize_store),
-	__EXTMOD_ATTR(force_update, 0220, NULL,
-			gt9896s_sysfs_force_update_store),
+			goodix_sysfs_update_fwversion_show, NULL),
+	__EXTMOD_ATTR(fwsize, S_IRUGO | S_IWUGO, goodix_sysfs_fwsize_show,
+			goodix_sysfs_fwsize_store),
+	__EXTMOD_ATTR(force_update, S_IWUGO, NULL,
+			goodix_sysfs_force_update_store),
 };
 
-static int gt9896s_fw_sysfs_init(struct gt9896s_ts_core *core_data,
-		struct gt9896s_ext_module *module)
+static int goodix_fw_sysfs_init(struct goodix_ts_core *core_data,
+		struct goodix_ext_module *module)
 {
 	struct fw_update_ctrl *fw_ctrl = module->priv_data;
 	struct kobj_type *ktype;
 	int ret = 0, i;
 
-	ktype = gt9896s_get_default_ktype();
+	ktype = goodix_get_default_ktype();
 	ret = kobject_init_and_add(&module->kobj,
 			ktype,
 			&core_data->pdev->dev.kobj,
@@ -1425,12 +1399,12 @@ static int gt9896s_fw_sysfs_init(struct gt9896s_ts_core *core_data,
 
 
 	ret = 0;
-	for (i = 0; i < ARRAY_SIZE(gt9896s_fwu_attrs) && !ret; i++)
-		ret = sysfs_create_file(&module->kobj, &gt9896s_fwu_attrs[i].attr);
+	for (i = 0; i < ARRAY_SIZE(goodix_fwu_attrs) && !ret; i++)
+		ret = sysfs_create_file(&module->kobj, &goodix_fwu_attrs[i].attr);
 	if (ret) {
 		ts_err("failed create fwu sysfs files");
 		while (--i >= 0)
-			sysfs_remove_file(&module->kobj, &gt9896s_fwu_attrs[i].attr);
+			sysfs_remove_file(&module->kobj, &goodix_fwu_attrs[i].attr);
 
 		kobject_put(&module->kobj);
 		ret = -EINVAL;
@@ -1438,9 +1412,9 @@ static int gt9896s_fw_sysfs_init(struct gt9896s_ts_core *core_data,
 	}
 
 	fw_ctrl->attr_fwimage.attr.name = "fwimage";
-	fw_ctrl->attr_fwimage.attr.mode = 0660;
+	fw_ctrl->attr_fwimage.attr.mode = S_IRUGO | S_IWUGO;
 	fw_ctrl->attr_fwimage.size = 0;
-	fw_ctrl->attr_fwimage.write = gt9896s_sysfs_fwimage_store;
+	fw_ctrl->attr_fwimage.write = goodix_sysfs_fwimage_store;
 	ret = sysfs_create_bin_file(&module->kobj,
 			&fw_ctrl->attr_fwimage);
 
@@ -1448,41 +1422,41 @@ exit_sysfs_init:
 	return ret;
 }
 
-static void gt9896s_fw_sysfs_remove(struct gt9896s_ext_module *module)
+static void goodix_fw_sysfs_remove(struct goodix_ext_module *module)
 {
 	struct fw_update_ctrl *fw_ctrl = module->priv_data;
 	int i;
 
 	sysfs_remove_bin_file(&module->kobj, &fw_ctrl->attr_fwimage);
 
-	for (i = 0; i < ARRAY_SIZE(gt9896s_fwu_attrs); i++)
+	for (i = 0; i < ARRAY_SIZE(goodix_fwu_attrs); i++)
 		sysfs_remove_file(&module->kobj,
-				&gt9896s_fwu_attrs[i].attr);
+				&goodix_fwu_attrs[i].attr);
 
 	kobject_put(&module->kobj);
 }
 
-int gt9896s_do_fw_update(int mode)
+int goodix_do_fw_update(int mode)
 {
 	struct task_struct *fwu_thrd;
-	struct fw_update_ctrl *fwu_ctrl = &gt9896s_fw_update_ctrl;
+	struct fw_update_ctrl *fwu_ctrl = &goodix_fw_update_ctrl;
 	int ret;
 
 	if (!fwu_ctrl->initialized) {
-		ts_err("fw mode uninit");
-		return -EINVAL;
+			ts_err("fw mode uninit");
+			return -EINVAL;
 	}
 
 	fwu_ctrl->mode = mode;
 	ts_debug("fw update mode 0x%x", mode);
 	if (fwu_ctrl->mode & UPDATE_MODE_BLOCK) {
-		ret = gt9896s_fw_update_thread(fwu_ctrl);
+		ret = goodix_fw_update_thread(fwu_ctrl);
 		ts_info("fw update return %d", ret);
 		return ret;
 	} else {
 		/* create and run update thread */
-		fwu_thrd = kthread_run(gt9896s_fw_update_thread,
-				fwu_ctrl, "gt9896s-fwu");
+		fwu_thrd = kthread_run(goodix_fw_update_thread,
+				fwu_ctrl, "goodix-fwu");
 		if (IS_ERR_OR_NULL(fwu_thrd)) {
 			ts_err("Failed to create update thread:%ld",
 					PTR_ERR(fwu_thrd));
@@ -1493,82 +1467,62 @@ int gt9896s_do_fw_update(int mode)
 	}
 }
 
-static int gt9896s_fw_update_init(struct gt9896s_ts_core *core_data,
-				struct gt9896s_ext_module *module)
+static int goodix_fw_update_init(struct goodix_ts_core *core_data,
+				struct goodix_ext_module *module)
 {
 	int ret = 0;
-	struct gt9896s_ts_board_data *ts_bdata = board_data(core_data);
+	struct goodix_ts_board_data *ts_bdata = board_data(core_data);
 
-	if (gt9896s_fw_update_ctrl.initialized) {
+	if (goodix_fw_update_ctrl.initialized) {
 		ts_info("no need reinit");
 		return ret;
 	}
 
-	if (!core_data || !ts_bdata || !core_data->ts_dev) {
+	if (!core_data || !atomic_read(&core_data->initialized) ||
+		!ts_bdata || !core_data->ts_dev) {
 		ts_err("core_data && ts_dev cann't be null");
 		return -ENODEV;
 	}
 
-	mutex_lock(&gt9896s_fw_update_ctrl.mutex);
-	module->priv_data = &gt9896s_fw_update_ctrl;
+	mutex_lock(&goodix_fw_update_ctrl.mutex);
+	module->priv_data = &goodix_fw_update_ctrl;
 
-	gt9896s_fw_update_ctrl.ts_dev = core_data->ts_dev;
-	gt9896s_fw_update_ctrl.allow_reset = true;
-	gt9896s_fw_update_ctrl.allow_irq = true;
-	gt9896s_fw_update_ctrl.allow_suspend = true;
-	gt9896s_fw_update_ctrl.allow_resume = true;
-	gt9896s_fw_update_ctrl.core_data = core_data;
-	gt9896s_fw_update_ctrl.mode = 0;
+	goodix_fw_update_ctrl.ts_dev = core_data->ts_dev;
+	goodix_fw_update_ctrl.allow_reset = true;
+	goodix_fw_update_ctrl.allow_irq = true;
+	goodix_fw_update_ctrl.allow_suspend = true;
+	goodix_fw_update_ctrl.allow_resume = true;
+	goodix_fw_update_ctrl.core_data = core_data;
+	goodix_fw_update_ctrl.mode = 0;
 	/* find a valid firmware image name */
 	if (ts_bdata && ts_bdata->fw_name)
-		strlcpy(gt9896s_fw_update_ctrl.fw_name, ts_bdata->fw_name,
-			sizeof(gt9896s_fw_update_ctrl.fw_name));
-	else {
-		if (ts_bdata->lcm_max_x == 1080 && ts_bdata->lcm_max_y == 2280) {
-			ret = snprintf(gt9896s_fw_update_ctrl.fw_name,
-						sizeof(gt9896s_fw_update_ctrl.fw_name),
-						"%s%s_1080x2280.bin",
-						TS_DEFAULT_FIRMWARE,
-						gt9896s_firmware_buf);
-		} else if (ts_bdata->lcm_max_x == 1080 && ts_bdata->lcm_max_y == 2300) {
-			ret = snprintf(gt9896s_fw_update_ctrl.fw_name,
-						sizeof(gt9896s_fw_update_ctrl.fw_name),
-						"%s%s_1080x2300.bin",
-						TS_DEFAULT_FIRMWARE,
-						gt9896s_firmware_buf);
-		} else {
-			ret = snprintf(gt9896s_fw_update_ctrl.fw_name,
-						sizeof(gt9896s_fw_update_ctrl.fw_name),
-						"%s%s.bin",
-						TS_DEFAULT_FIRMWARE,
-						gt9896s_firmware_buf);
-		}
+		strlcpy(goodix_fw_update_ctrl.fw_name, ts_bdata->fw_name,
+			sizeof(goodix_fw_update_ctrl.fw_name));
+	else
+		strlcpy(goodix_fw_update_ctrl.fw_name, TS_DEFAULT_FIRMWARE,
+			sizeof(goodix_fw_update_ctrl.fw_name));
 
-		ts_info("firmware_bin_name %s!!!", gt9896s_fw_update_ctrl.fw_name);
-		if (ret >= sizeof(gt9896s_fw_update_ctrl.fw_name))
-			ts_err("get firmware_bin_name name FAILED!!!");
-	}
-
-	ret = gt9896s_fw_sysfs_init(core_data, module);
+	ret = goodix_fw_sysfs_init(core_data, module);
 	if (ret) {
 		ts_err("failed create fwupate sysfs node");
 		goto err_out;
 	}
 
-	gt9896s_fw_update_ctrl.initialized = 1;
+	goodix_fw_update_ctrl.initialized = 1;
+	complete_all(&fw_update_module_init_comp);
 err_out:
-	mutex_unlock(&gt9896s_fw_update_ctrl.mutex);
+	mutex_unlock(&goodix_fw_update_ctrl.mutex);
 	return ret;
 }
 
-static int gt9896s_fw_update_exit(struct gt9896s_ts_core *core_data,
-				struct gt9896s_ext_module *module)
+static int goodix_fw_update_exit(struct goodix_ts_core *core_data,
+				struct goodix_ext_module *module)
 {
 	return 0;
 }
 
-static int gt9896s_fw_before_suspend(struct gt9896s_ts_core *core_data,
-				struct gt9896s_ext_module *module)
+static int goodix_fw_before_suspend(struct goodix_ts_core *core_data,
+				struct goodix_ext_module *module)
 {
 	struct fw_update_ctrl *fwu_ctrl = module->priv_data;
 
@@ -1576,8 +1530,8 @@ static int gt9896s_fw_before_suspend(struct gt9896s_ts_core *core_data,
 				EVT_HANDLED : EVT_CANCEL_SUSPEND;
 }
 
-static int gt9896s_fw_before_resume(struct gt9896s_ts_core *core_data,
-				struct gt9896s_ext_module *module)
+static int goodix_fw_before_resume(struct goodix_ts_core *core_data,
+				struct goodix_ext_module *module)
 {
 	struct fw_update_ctrl *fwu_ctrl = module->priv_data;
 
@@ -1585,14 +1539,14 @@ static int gt9896s_fw_before_resume(struct gt9896s_ts_core *core_data,
 				EVT_HANDLED : EVT_CANCEL_RESUME;
 }
 
-static int gt9896s_fw_after_resume(struct gt9896s_ts_core *core_data,
-				struct gt9896s_ext_module *module)
+static int goodix_fw_after_resume(struct goodix_ts_core *core_data,
+				struct goodix_ext_module *module)
 {
 	return 0;
 }
 
-static int gt9896s_fw_irq_event(struct gt9896s_ts_core *core_data,
-				struct gt9896s_ext_module *module)
+static int goodix_fw_irq_event(struct goodix_ts_core *core_data,
+				struct goodix_ext_module *module)
 {
 	struct fw_update_ctrl *fwu_ctrl = module->priv_data;
 
@@ -1600,8 +1554,8 @@ static int gt9896s_fw_irq_event(struct gt9896s_ts_core *core_data,
 				EVT_HANDLED : EVT_CANCEL_IRQEVT;
 }
 
-static int gt9896s_fw_before_reset(struct gt9896s_ts_core *core_data,
-				struct gt9896s_ext_module *module)
+static int goodix_fw_before_reset(struct goodix_ts_core *core_data,
+				struct goodix_ext_module *module)
 {
 	struct fw_update_ctrl *fwu_ctrl = module->priv_data;
 
@@ -1609,44 +1563,49 @@ static int gt9896s_fw_before_reset(struct gt9896s_ts_core *core_data,
 				EVT_HANDLED : EVT_CANCEL_RESET;
 }
 
-static const struct gt9896s_ext_module_funcs gt9896s_ext_funcs = {
-	.init = gt9896s_fw_update_init,
-	.exit = gt9896s_fw_update_exit,
-	.before_reset = gt9896s_fw_before_reset,
+static const struct goodix_ext_module_funcs goodix_ext_funcs = {
+	.init = goodix_fw_update_init,
+	.exit = goodix_fw_update_exit,
+	.before_reset = goodix_fw_before_reset,
 	.after_reset = NULL,
-	.before_suspend = gt9896s_fw_before_suspend,
+	.before_suspend = goodix_fw_before_suspend,
 	.after_suspend = NULL,
-	.before_resume = gt9896s_fw_before_resume,
-	.after_resume = gt9896s_fw_after_resume,
-	.irq_event = gt9896s_fw_irq_event,
+	.before_resume = goodix_fw_before_resume,
+	.after_resume = goodix_fw_after_resume,
+	.irq_event = goodix_fw_irq_event,
 };
 
-static struct gt9896s_ext_module gt9896s_fwu_module = {
-	.name = "gt9896s-fwu",
-	.funcs = &gt9896s_ext_funcs,
+static struct goodix_ext_module goodix_fwu_module = {
+	.name = "goodix-fwu",
+	.funcs = &goodix_ext_funcs,
 	.priority = EXTMOD_PRIO_FWUPDATE,
 };
 
-static int __init gt9896s_fwu_module_init(void)
+static int __init goodix_fwu_module_init(void)
 {
-	ts_info("gt9896s_fwupdate_module_ini IN");
-	mutex_init(&gt9896s_fw_update_ctrl.mutex);
-	return gt9896s_register_ext_module(&gt9896s_fwu_module);
-}
-
-static void __exit gt9896s_fwu_module_exit(void)
-{
-	mutex_lock(&gt9896s_fw_update_ctrl.mutex);
-	gt9896s_unregister_ext_module(&gt9896s_fwu_module);
-	if (gt9896s_fw_update_ctrl.initialized) {
-		gt9896s_fw_sysfs_remove(&gt9896s_fwu_module);
-		gt9896s_fw_update_ctrl.initialized = 0;
+	ts_info("goodix_fwupdate_module_ini IN");
+	if (tp_load_ok == false) {
+		ts_info("tp load error,will return in goodix_fwu_module_init\n");
+		return -EINVAL;
 	}
-	mutex_lock(&gt9896s_fw_update_ctrl.mutex);
+	mutex_init(&goodix_fw_update_ctrl.mutex);
+	init_completion(&fw_update_module_init_comp);
+	return goodix_register_ext_module(&goodix_fwu_module);
 }
 
-late_initcall(gt9896s_fwu_module_init);
-module_exit(gt9896s_fwu_module_exit);
+static void __exit goodix_fwu_module_exit(void)
+{
+	mutex_lock(&goodix_fw_update_ctrl.mutex);
+	goodix_unregister_ext_module(&goodix_fwu_module);
+	if (goodix_fw_update_ctrl.initialized) {
+		goodix_fw_sysfs_remove(&goodix_fwu_module);
+		goodix_fw_update_ctrl.initialized = 0;
+	}
+	mutex_lock(&goodix_fw_update_ctrl.mutex);
+}
+
+late_initcall(goodix_fwu_module_init);
+module_exit(goodix_fwu_module_exit);
 
 MODULE_DESCRIPTION("Goodix FWU Module");
 MODULE_AUTHOR("Goodix, Inc.");
