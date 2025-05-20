@@ -497,7 +497,7 @@ const char *bdi_dev_name(struct backing_dev_info *bdi);
 
 extern const char *bdi_unknown_name;
 
-static inline const char *bdi_dev_name(struct backing_dev_info *bdi)
+extern inline const char *bdi_dev_name(struct backing_dev_info *bdi)
 {
 	if (!bdi || !bdi->dev)
 		return bdi_unknown_name;
