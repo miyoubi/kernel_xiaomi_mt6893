@@ -1871,17 +1871,9 @@ static struct dma_buf *__ion_share_dma_buf(struct ion_client *client,
 		return dmabuf;
 	}
 
-mutex_lock(&dmabuf_list.lock);
-
-// Defensive check to prevent list corruption
-if (!dmabuf->node.next && !dmabuf->node.prev) {
-    list_add(&dmabuf->node, &dmabuf_list.head);
-} else {
-    pr_err("%s: Warning: dmabuf->node already on list! Possible double export or corruption.\n", __func__);
-    // Skip adding to list to avoid kernel panic
-}
-
-mutex_unlock(&dmabuf_list.lock);
+	mutex_lock(&dmabuf_list.lock);
+	list_add(&dmabuf->node, &dmabuf_list.head);
+	mutex_unlock(&dmabuf_list.lock);
 
 	return dmabuf;
 }
