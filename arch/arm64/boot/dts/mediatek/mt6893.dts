@@ -2,7 +2,6 @@
  * Mediatek's MT6885 SoC device tree source
  *
  * Copyright (C) 2019 MediaTek Inc.
- * Copyright (C) 2021 XiaoMi, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -7791,10 +7790,10 @@ page_owner=on loop.max_part=7";
 		gpio-irq-std = <&pio 11 0x0>;
 	};
 
-//	irq_nfc: irq_nfc {
-//		compatible = "mediatek,irq_nfc-eint";
-//                reg = <0x08>;
-//	};
+	irq_nfc: irq_nfc {
+		compatible = "mediatek,irq_nfc-eint";
+                reg = <0x08>;
+	};
 
 	/* NFC end */
 
